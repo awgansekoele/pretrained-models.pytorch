@@ -3,64 +3,40 @@ from collections import OrderedDict
 
 import torch
 import torch.nn as nn
-import torch.utils.model_zoo as model_zoo
-
-
-pretrained_settings = {
-    'pnasnet5large': {
-        'imagenet': {
-            'url': 'http://data.lip6.fr/cadene/pretrainedmodels/pnasnet5large-bf079911.pth',
-            'input_space': 'RGB',
-            'input_size': [3, 331, 331],
-            'input_range': [0, 1],
-            'mean': [0.5, 0.5, 0.5],
-            'std': [0.5, 0.5, 0.5],
-            'num_classes': 1000
-        },
-        'imagenet+background': {
-            'url': 'http://data.lip6.fr/cadene/pretrainedmodels/pnasnet5large-bf079911.pth',
-            'input_space': 'RGB',
-            'input_size': [3, 331, 331],
-            'input_range': [0, 1],
-            'mean': [0.5, 0.5, 0.5],
-            'std': [0.5, 0.5, 0.5],
-            'num_classes': 1001
-        }
-    }
-}
+from torch.autograd import Variable
 
 
 class MaxPool(nn.Module):
 
     def __init__(self, kernel_size, stride=1, padding=1, zero_pad=False):
         super(MaxPool, self).__init__()
-        self.zero_pad = nn.ZeroPad2d((1, 0, 1, 0)) if zero_pad else None
-        self.pool = nn.MaxPool2d(kernel_size, stride=stride, padding=padding)
+        self.zero_pad = nn.ConstantPad1d((1,0), 0) if zero_pad else None
+        self.pool = nn.MaxPool1d(kernel_size, stride=stride, padding=padding)
 
     def forward(self, x):
         if self.zero_pad:
             x = self.zero_pad(x)
         x = self.pool(x)
         if self.zero_pad:
-            x = x[:, :, 1:, 1:]
+            x = x[:, :, 1:]
         return x
 
 
-class SeparableConv2d(nn.Module):
+class SeparableConv1d(nn.Module):
 
     def __init__(self, in_channels, out_channels, dw_kernel_size, dw_stride,
                  dw_padding):
-        super(SeparableConv2d, self).__init__()
-        self.depthwise_conv2d = nn.Conv2d(in_channels, in_channels,
+        super(SeparableConv1d, self).__init__()
+        self.depthwise_conv1d = nn.Conv1d(in_channels, in_channels,
                                           kernel_size=dw_kernel_size,
                                           stride=dw_stride, padding=dw_padding,
                                           groups=in_channels, bias=False)
-        self.pointwise_conv2d = nn.Conv2d(in_channels, out_channels,
+        self.pointwise_conv1d = nn.Conv1d(in_channels, out_channels,
                                           kernel_size=1, bias=False)
 
     def forward(self, x):
-        x = self.depthwise_conv2d(x)
-        x = self.pointwise_conv2d(x)
+        x = self.depthwise_conv1d(x)
+        x = self.pointwise_conv1d(x)
         return x
 
 
@@ -71,17 +47,17 @@ class BranchSeparables(nn.Module):
         super(BranchSeparables, self).__init__()
         padding = kernel_size // 2
         middle_channels = out_channels if stem_cell else in_channels
-        self.zero_pad = nn.ZeroPad2d((1, 0, 1, 0)) if zero_pad else None
+        self.zero_pad = nn.ConstantPad1d((1,0), 0) if zero_pad else None
         self.relu_1 = nn.ReLU()
-        self.separable_1 = SeparableConv2d(in_channels, middle_channels,
+        self.separable_1 = SeparableConv1d(in_channels, middle_channels,
                                            kernel_size, dw_stride=stride,
                                            dw_padding=padding)
-        self.bn_sep_1 = nn.BatchNorm2d(middle_channels, eps=0.001)
+        self.bn_sep_1 = nn.BatchNorm1d(middle_channels, eps=0.001)
         self.relu_2 = nn.ReLU()
-        self.separable_2 = SeparableConv2d(middle_channels, out_channels,
+        self.separable_2 = SeparableConv1d(middle_channels, out_channels,
                                            kernel_size, dw_stride=1,
                                            dw_padding=padding)
-        self.bn_sep_2 = nn.BatchNorm2d(out_channels, eps=0.001)
+        self.bn_sep_2 = nn.BatchNorm1d(out_channels, eps=0.001)
 
     def forward(self, x):
         x = self.relu_1(x)
@@ -89,7 +65,7 @@ class BranchSeparables(nn.Module):
             x = self.zero_pad(x)
         x = self.separable_1(x)
         if self.zero_pad:
-            x = x[:, :, 1:, 1:].contiguous()
+            x = x[:, :, 1:].contiguous()
         x = self.bn_sep_1(x)
         x = self.relu_2(x)
         x = self.separable_2(x)
@@ -102,10 +78,10 @@ class ReluConvBn(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1):
         super(ReluConvBn, self).__init__()
         self.relu = nn.ReLU()
-        self.conv = nn.Conv2d(in_channels, out_channels,
+        self.conv = nn.Conv1d(in_channels, out_channels,
                               kernel_size=kernel_size, stride=stride,
                               bias=False)
-        self.bn = nn.BatchNorm2d(out_channels, eps=0.001)
+        self.bn = nn.BatchNorm1d(out_channels, eps=0.001)
 
     def forward(self, x):
         x = self.relu(x)
@@ -120,17 +96,17 @@ class FactorizedReduction(nn.Module):
         super(FactorizedReduction, self).__init__()
         self.relu = nn.ReLU()
         self.path_1 = nn.Sequential(OrderedDict([
-            ('avgpool', nn.AvgPool2d(1, stride=2, count_include_pad=False)),
-            ('conv', nn.Conv2d(in_channels, out_channels // 2,
+            ('avgpool', nn.AvgPool1d(1, stride=2, count_include_pad=False)),
+            ('conv', nn.Conv1d(in_channels, out_channels // 2,
                                kernel_size=1, bias=False)),
         ]))
         self.path_2 = nn.Sequential(OrderedDict([
-            ('pad', nn.ZeroPad2d((0, 1, 0, 1))),
-            ('avgpool', nn.AvgPool2d(1, stride=2, count_include_pad=False)),
-            ('conv', nn.Conv2d(in_channels, out_channels // 2,
+            ('pad', nn.ConstantPad1d((0, 1), 0)),
+            ('avgpool', nn.AvgPool1d(1, stride=2, count_include_pad=False)),
+            ('conv', nn.Conv1d(in_channels, out_channels // 2,
                                kernel_size=1, bias=False)),
         ]))
-        self.final_path_bn = nn.BatchNorm2d(out_channels, eps=0.001)
+        self.final_path_bn = nn.BatchNorm1d(out_channels, eps=0.001)
 
     def forward(self, x):
         x = self.relu(x)
@@ -138,7 +114,7 @@ class FactorizedReduction(nn.Module):
         x_path1 = self.path_1(x)
 
         x_path2 = self.path_2.pad(x)
-        x_path2 = x_path2[:, :, 1:, 1:]
+        x_path2 = x_path2[:, :, 1:]
         x_path2 = self.path_2.avgpool(x_path2)
         x_path2 = self.path_2.conv(x_path2)
 
@@ -191,9 +167,9 @@ class CellStem0(CellBase):
                                                  stem_cell=True)
         self.comb_iter_0_right = nn.Sequential(OrderedDict([
             ('max_pool', MaxPool(3, stride=2)),
-            ('conv', nn.Conv2d(in_channels_left, out_channels_left,
+            ('conv', nn.Conv1d(in_channels_left, out_channels_left,
                                kernel_size=1, bias=False)),
-            ('bn', nn.BatchNorm2d(out_channels_left, eps=0.001)),
+            ('bn', nn.BatchNorm1d(out_channels_left, eps=0.001)),
         ]))
         self.comb_iter_1_left = BranchSeparables(out_channels_right,
                                                  out_channels_right,
@@ -293,8 +269,8 @@ class PNASNet5Large(nn.Module):
         super(PNASNet5Large, self).__init__()
         self.num_classes = num_classes
         self.conv_0 = nn.Sequential(OrderedDict([
-            ('conv', nn.Conv2d(3, 96, kernel_size=3, stride=2, bias=False)),
-            ('bn', nn.BatchNorm2d(96, eps=0.001))
+            ('conv', nn.Conv1d(2, 96, kernel_size=3, stride=2, bias=False)),
+            ('bn', nn.BatchNorm1d(96, eps=0.001))
         ]))
         self.cell_stem_0 = CellStem0(in_channels_left=96, out_channels_left=54,
                                      in_channels_right=96,
@@ -333,7 +309,7 @@ class PNASNet5Large(nn.Module):
         self.cell_11 = Cell(in_channels_left=4320, out_channels_left=864,
                             in_channels_right=4320, out_channels_right=864)
         self.relu = nn.ReLU()
-        self.avg_pool = nn.AvgPool2d(11, stride=1, padding=0)
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
         self.dropout = nn.Dropout(0.5)
         self.last_linear = nn.Linear(4320, num_classes)
 
@@ -369,33 +345,19 @@ class PNASNet5Large(nn.Module):
         return x
 
 
-def pnasnet5large(num_classes=1001, pretrained='imagenet'):
+def pnasnet5large(num_classes=1001):
     r"""PNASNet-5 model architecture from the
     `"Progressive Neural Architecture Search"
     <https://arxiv.org/abs/1712.00559>`_ paper.
     """
-    if pretrained:
-        settings = pretrained_settings['pnasnet5large'][pretrained]
-        assert num_classes == settings[
-            'num_classes'], 'num_classes should be {}, but is {}'.format(
-            settings['num_classes'], num_classes)
 
-        # both 'imagenet'&'imagenet+background' are loaded from same parameters
-        model = PNASNet5Large(num_classes=1001)
-        model.load_state_dict(model_zoo.load_url(settings['url']))
+    return PNASNet5Large(num_classes=num_classes)
 
-        if pretrained == 'imagenet':
-            new_last_linear = nn.Linear(model.last_linear.in_features, 1000)
-            new_last_linear.weight.data = model.last_linear.weight.data[1:]
-            new_last_linear.bias.data = model.last_linear.bias.data[1:]
-            model.last_linear = new_last_linear
 
-        model.input_space = settings['input_space']
-        model.input_size = settings['input_size']
-        model.input_range = settings['input_range']
+if __name__ == "__main__":
 
-        model.mean = settings['mean']
-        model.std = settings['std']
-    else:
-        model = PNASNet5Large(num_classes=num_classes)
-    return model
+    model = PNASNet5Large()
+    input = Variable(torch.randn(2, 2, 1024))
+    output = model(input)
+
+    print(output.size())

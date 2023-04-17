@@ -1,86 +1,94 @@
-from __future__ import print_function, division, absolute_import
-import os
-from os.path import expanduser
-import hickle as hkl
 import torch
+import torch.nn as nn
+import torch.nn.init as init
 import torch.nn.functional as F
 from torch.autograd import Variable
 
-__all__ = ['wideresnet50']
-
-model_urls = {
-    'wideresnet152': 'https://s3.amazonaws.com/pytorch/h5models/wide-resnet-50-2-export.hkl'
-}
-
-def define_model(params):
-    def conv2d(input, params, base, stride=1, pad=0):
-        return F.conv2d(input, params[base + '.weight'],
-                        params[base + '.bias'], stride, pad)
-
-    def group(input, params, base, stride, n):
-        o = input
-        for i in range(0,n):
-            b_base = ('%s.block%d.conv') % (base, i)
-            x = o
-            o = conv2d(x, params, b_base + '0')
-            o = F.relu(o)
-            o = conv2d(o, params, b_base + '1', stride=i==0 and stride or 1, pad=1)
-            o = F.relu(o)
-            o = conv2d(o, params, b_base + '2')
-            if i == 0:
-                o += conv2d(x, params, b_base + '_dim', stride=stride)
-            else:
-                o += x
-            o = F.relu(o)
-        return o
-
-    # determine network size by parameters
-    blocks = [sum([re.match('group%d.block\d+.conv0.weight'%j, k) is not None
-                   for k in params.keys()]) for j in range(4)]
-
-    def f(input, params, pooling_classif=True):
-        o = F.conv2d(input, params['conv0.weight'], params['conv0.bias'], 2, 3)
-        o = F.relu(o)
-        o = F.max_pool2d(o, 3, 2, 1)
-        o_g0 = group(o, params, 'group0', 1, blocks[0])
-        o_g1 = group(o_g0, params, 'group1', 2, blocks[1])
-        o_g2 = group(o_g1, params, 'group2', 2, blocks[2])
-        o_g3 = group(o_g2, params, 'group3', 2, blocks[3])
-        if pooling_classif:
-            o = F.avg_pool2d(o_g3, 7, 1, 0)
-            o = o.view(o.size(0), -1)
-            o = F.linear(o, params['fc.weight'], params['fc.bias'])
-        return o
-
-    return f
+import sys
+import numpy as np
 
 
-class WideResNet(nn.Module):
+def conv3x1(in_planes, out_planes, stride=1):
+    return nn.Conv1d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=True)
 
-    def __init__(self, pooling):
-        super(WideResNet, self).__init__()
-        self.pooling = pooling
-        self.params = params
+
+def conv_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        init.xavier_uniform_(m.weight, gain=np.sqrt(2))
+        init.constant_(m.bias, 0)
+    elif classname.find('BatchNorm') != -1:
+        init.constant_(m.weight, 1)
+        init.constant_(m.bias, 0)
+
+
+class wide_basic(nn.Module):
+    def __init__(self, in_planes, planes, dropout_rate, stride=1):
+        super(wide_basic, self).__init__()
+        self.bn1 = nn.BatchNorm1d(in_planes)
+        self.conv1 = nn.Conv1d(in_planes, planes, kernel_size=3, padding=1, bias=True)
+        self.dropout = nn.Dropout(p=dropout_rate)
+        self.bn2 = nn.BatchNorm1d(planes)
+        self.conv2 = nn.Conv1d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=True)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv1d(in_planes, planes, kernel_size=1, stride=stride, bias=True),
+            )
 
     def forward(self, x):
-        x = f(x, self.params, self.pooling)
-        return x
+        out = self.dropout(self.conv1(F.relu(self.bn1(x))))
+        out = self.conv2(F.relu(self.bn2(out)))
+        out += self.shortcut(x)
+
+        return out
 
 
-def wideresnet50(pooling):
-    dir_models = os.path.join(expanduser("~"), '.torch/wideresnet')
-    path_hkl = os.path.join(dir_models, 'wideresnet50.hkl')
-    if os.path.isfile(path_hkl):
-        params = hkl.load(path_hkl)
-        # convert numpy arrays to torch Variables
-        for k,v in sorted(params.items()):
-            print(k, v.shape)
-            params[k] = Variable(torch.from_numpy(v), requires_grad=True)
-    else:
-        os.system('mkdir -p ' + dir_models)
-        os.system('wget {} -O {}'.format(model_urls['wideresnet50'], path_hkl))
-    f = define_model(params)
-    model = WideResNet(pooling)
-    return model
+class Wide_ResNet(nn.Module):
+    def __init__(self, depth=52, widen_factor=2, dropout_rate=0.3, num_classes=1000):
+        super(Wide_ResNet, self).__init__()
+        self.in_planes = 16
+
+        assert ((depth - 4) % 6 == 0), 'Wide-resnet depth should be 6n+4'
+        n = (depth - 4) / 6
+        k = widen_factor
+
+        print('| Wide-Resnet %dx%d' % (depth, k))
+        nStages = [16, 16 * k, 32 * k, 64 * k]
+
+        self.conv1 = conv3x1(2, nStages[0])
+        self.layer1 = self._wide_layer(wide_basic, nStages[1], n, dropout_rate, stride=1)
+        self.layer2 = self._wide_layer(wide_basic, nStages[2], n, dropout_rate, stride=2)
+        self.layer3 = self._wide_layer(wide_basic, nStages[3], n, dropout_rate, stride=2)
+        self.bn1 = nn.BatchNorm1d(nStages[3], momentum=0.9)
+        self.linear = nn.Linear(nStages[3], num_classes)
+
+    def _wide_layer(self, block, planes, num_blocks, dropout_rate, stride):
+        strides = [stride] + [1] * (int(num_blocks) - 1)
+        layers = []
+
+        for stride in strides:
+            layers.append(block(self.in_planes, planes, dropout_rate, stride))
+            self.in_planes = planes
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = F.relu(self.bn1(out))
+        out = F.adaptive_avg_pool1d(out, 1)
+        out = out.view(out.size(0), -1)
+        out = self.linear(out)
+
+        return out
 
 
+if __name__ == '__main__':
+    net = Wide_ResNet()
+    y = net(Variable(torch.randn(2, 2, 1024)))
+
+    print(y.size())

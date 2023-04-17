@@ -187,7 +187,7 @@ def modify_densenets(model):
 
     def logits(self, features):
         x = F.relu(features, inplace=True)
-        x = F.avg_pool2d(x, kernel_size=7, stride=1)
+        x = F.avg_pool1d(x, kernel_size=7, stride=1)
         x = x.view(x.size(0), -1)
         x = self.last_linear(x)
         return x
@@ -264,13 +264,13 @@ def inceptionv3(num_classes=1000, pretrained='imagenet'):
 
     def features(self, input):
         # 299 x 299 x 3
-        x = self.Conv2d_1a_3x3(input) # 149 x 149 x 32
-        x = self.Conv2d_2a_3x3(x) # 147 x 147 x 32
-        x = self.Conv2d_2b_3x3(x) # 147 x 147 x 64
-        x = F.max_pool2d(x, kernel_size=3, stride=2) # 73 x 73 x 64
-        x = self.Conv2d_3b_1x1(x) # 73 x 73 x 80
-        x = self.Conv2d_4a_3x3(x) # 71 x 71 x 192
-        x = F.max_pool2d(x, kernel_size=3, stride=2) # 35 x 35 x 192
+        x = self.Conv1d_1a_3x3(input) # 149 x 149 x 32
+        x = self.Conv1d_2a_3x3(x) # 147 x 147 x 32
+        x = self.Conv1d_2b_3x3(x) # 147 x 147 x 64
+        x = F.max_pool1d(x, kernel_size=3, stride=2) # 73 x 73 x 64
+        x = self.Conv1d_3b_1x1(x) # 73 x 73 x 80
+        x = self.Conv1d_4a_3x3(x) # 71 x 71 x 192
+        x = F.max_pool1d(x, kernel_size=3, stride=2) # 35 x 35 x 192
         x = self.Mixed_5b(x) # 35 x 35 x 256
         x = self.Mixed_5c(x) # 35 x 35 x 288
         x = self.Mixed_5d(x) # 35 x 35 x 288
@@ -287,7 +287,7 @@ def inceptionv3(num_classes=1000, pretrained='imagenet'):
         return x
 
     def logits(self, features):
-        x = F.avg_pool2d(features, kernel_size=8) # 1 x 1 x 2048
+        x = F.avg_pool1d(features, kernel_size=8) # 1 x 1 x 2048
         x = F.dropout(x, training=self.training) # 1 x 1 x 2048
         x = x.view(x.size(0), -1) # 2048
         x = self.last_linear(x) # 1000 (num_classes)

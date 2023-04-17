@@ -1,33 +1,19 @@
 from __future__ import print_function, division, absolute_import
 import torch
 import torch.nn as nn
+from torch.autograd import Variable
 from torch.utils import model_zoo
 
 __all__ = ['PolyNet', 'polynet']
 
-pretrained_settings = {
-    'polynet': {
-        'imagenet': {
-            'url': 'http://data.lip6.fr/cadene/pretrainedmodels/polynet-f71d82a5.pth',
-            'input_space': 'RGB',
-            'input_size': [3, 331, 331],
-            'input_range': [0, 1],
-            'mean': [0.485, 0.456, 0.406],
-            'std': [0.229, 0.224, 0.225],
-            'num_classes': 1000
-        },
-    }
-}
-
-
-class BasicConv2d(nn.Module):
+class BasicConv1d(nn.Module):
 
     def __init__(self, in_planes, out_planes, kernel_size, stride=1, padding=0,
                  output_relu=True):
-        super(BasicConv2d, self).__init__()
-        self.conv = nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size,
+        super(BasicConv1d, self).__init__()
+        self.conv = nn.Conv1d(in_planes, out_planes, kernel_size=kernel_size,
                               stride=stride, padding=padding, bias=False)
-        self.bn = nn.BatchNorm2d(out_planes)
+        self.bn = nn.BatchNorm1d(out_planes)
         self.relu = nn.ReLU() if output_relu else None
 
     def forward(self, x):
@@ -38,7 +24,7 @@ class BasicConv2d(nn.Module):
         return x
 
 
-class PolyConv2d(nn.Module):
+class PolyConv1d(nn.Module):
     """A block that is used inside poly-N (poly-2, poly-3, and so on) modules.
     The Convolution layer is shared between all Inception blocks inside
     a poly-N module. BatchNorm layers are not shared between Inception blocks
@@ -48,11 +34,11 @@ class PolyConv2d(nn.Module):
 
     def __init__(self, in_planes, out_planes, kernel_size, num_blocks,
                  stride=1, padding=0):
-        super(PolyConv2d, self).__init__()
-        self.conv = nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size,
+        super(PolyConv1d, self).__init__()
+        self.conv = nn.Conv1d(in_planes, out_planes, kernel_size=kernel_size,
                               stride=stride, padding=padding, bias=False)
         self.bn_blocks = nn.ModuleList([
-            nn.BatchNorm2d(out_planes) for _ in range(num_blocks)
+            nn.BatchNorm1d(out_planes) for _ in range(num_blocks)
         ])
         self.relu = nn.ReLU()
 
@@ -69,24 +55,24 @@ class Stem(nn.Module):
     def __init__(self):
         super(Stem, self).__init__()
         self.conv1 = nn.Sequential(
-            BasicConv2d(3, 32, kernel_size=3, stride=2),
-            BasicConv2d(32, 32, kernel_size=3),
-            BasicConv2d(32, 64, kernel_size=3, padding=1),
+            BasicConv1d(2, 32, kernel_size=3, stride=2),
+            BasicConv1d(32, 32, kernel_size=3),
+            BasicConv1d(32, 64, kernel_size=3, padding=1),
         )
-        self.conv1_pool_branch = nn.MaxPool2d(3, stride=2)
-        self.conv1_branch = BasicConv2d(64, 96, kernel_size=3, stride=2)
+        self.conv1_pool_branch = nn.MaxPool1d(3, stride=2)
+        self.conv1_branch = BasicConv1d(64, 96, kernel_size=3, stride=2)
         self.conv2_short = nn.Sequential(
-            BasicConv2d(160, 64, kernel_size=1),
-            BasicConv2d(64, 96, kernel_size=3),
+            BasicConv1d(160, 64, kernel_size=1),
+            BasicConv1d(64, 96, kernel_size=3),
         )
         self.conv2_long = nn.Sequential(
-            BasicConv2d(160, 64, kernel_size=1),
-            BasicConv2d(64, 64, kernel_size=(7, 1), padding=(3, 0)),
-            BasicConv2d(64, 64, kernel_size=(1, 7), padding=(0, 3)),
-            BasicConv2d(64, 96, kernel_size=3),
+            BasicConv1d(160, 64, kernel_size=1),
+            BasicConv1d(64, 64, kernel_size=(7, ), padding=3),
+            BasicConv1d(64, 64, kernel_size=(7, ), padding=3),
+            BasicConv1d(64, 96, kernel_size=3),
         )
-        self.conv2_pool_branch = nn.MaxPool2d(3, stride=2)
-        self.conv2_branch = BasicConv2d(192, 192, kernel_size=3, stride=2)
+        self.conv2_pool_branch = nn.MaxPool1d(3, stride=2)
+        self.conv2_branch = BasicConv1d(192, 192, kernel_size=3, stride=2)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -111,23 +97,23 @@ class BlockA(nn.Module):
     def __init__(self):
         super(BlockA, self).__init__()
         self.path0 = nn.Sequential(
-            BasicConv2d(384, 32, kernel_size=1),
-            BasicConv2d(32, 48, kernel_size=3, padding=1),
-            BasicConv2d(48, 64, kernel_size=3, padding=1),
+            BasicConv1d(384, 32, kernel_size=1),
+            BasicConv1d(32, 48, kernel_size=3, padding=1),
+            BasicConv1d(48, 64, kernel_size=3, padding=1),
         )
         self.path1 = nn.Sequential(
-            BasicConv2d(384, 32, kernel_size=1),
-            BasicConv2d(32, 32, kernel_size=3, padding=1),
+            BasicConv1d(384, 32, kernel_size=1),
+            BasicConv1d(32, 32, kernel_size=3, padding=1),
         )
-        self.path2 = BasicConv2d(384, 32, kernel_size=1)
-        self.conv2d = BasicConv2d(128, 384, kernel_size=1, output_relu=False)
+        self.path2 = BasicConv1d(384, 32, kernel_size=1)
+        self.conv1d = BasicConv1d(128, 384, kernel_size=1, output_relu=False)
 
     def forward(self, x):
         x0 = self.path0(x)
         x1 = self.path1(x)
         x2 = self.path2(x)
         out = torch.cat((x0, x1, x2), 1)
-        out = self.conv2d(out)
+        out = self.conv1d(out)
         return out
 
 
@@ -137,18 +123,18 @@ class BlockB(nn.Module):
     def __init__(self):
         super(BlockB, self).__init__()
         self.path0 = nn.Sequential(
-            BasicConv2d(1152, 128, kernel_size=1),
-            BasicConv2d(128, 160, kernel_size=(1, 7), padding=(0, 3)),
-            BasicConv2d(160, 192, kernel_size=(7, 1), padding=(3, 0)),
+            BasicConv1d(1152, 128, kernel_size=1),
+            BasicConv1d(128, 160, kernel_size=(7, ), padding=3),
+            BasicConv1d(160, 192, kernel_size=(7, ), padding=3),
         )
-        self.path1 = BasicConv2d(1152, 192, kernel_size=1)
-        self.conv2d = BasicConv2d(384, 1152, kernel_size=1, output_relu=False)
+        self.path1 = BasicConv1d(1152, 192, kernel_size=1)
+        self.conv1d = BasicConv1d(384, 1152, kernel_size=1, output_relu=False)
 
     def forward(self, x):
         x0 = self.path0(x)
         x1 = self.path1(x)
         out = torch.cat((x0, x1), 1)
-        out = self.conv2d(out)
+        out = self.conv1d(out)
         return out
 
 
@@ -158,18 +144,18 @@ class BlockC(nn.Module):
     def __init__(self):
         super(BlockC, self).__init__()
         self.path0 = nn.Sequential(
-            BasicConv2d(2048, 192, kernel_size=1),
-            BasicConv2d(192, 224, kernel_size=(1, 3), padding=(0, 1)),
-            BasicConv2d(224, 256, kernel_size=(3, 1), padding=(1, 0)),
+            BasicConv1d(2048, 192, kernel_size=1),
+            BasicConv1d(192, 224, kernel_size=(3, ), padding=1),
+            BasicConv1d(224, 256, kernel_size=(3, ), padding=1),
         )
-        self.path1 = BasicConv2d(2048, 192, kernel_size=1)
-        self.conv2d = BasicConv2d(448, 2048, kernel_size=1, output_relu=False)
+        self.path1 = BasicConv1d(2048, 192, kernel_size=1)
+        self.conv1d = BasicConv1d(448, 2048, kernel_size=1, output_relu=False)
 
     def forward(self, x):
         x0 = self.path0(x)
         x1 = self.path1(x)
         out = torch.cat((x0, x1), 1)
-        out = self.conv2d(out)
+        out = self.conv1d(out)
         return out
 
 
@@ -181,12 +167,12 @@ class ReductionA(nn.Module):
     def __init__(self):
         super(ReductionA, self).__init__()
         self.path0 = nn.Sequential(
-            BasicConv2d(384, 256, kernel_size=1),
-            BasicConv2d(256, 256, kernel_size=3, padding=1),
-            BasicConv2d(256, 384, kernel_size=3, stride=2),
+            BasicConv1d(384, 256, kernel_size=1),
+            BasicConv1d(256, 256, kernel_size=3, padding=1),
+            BasicConv1d(256, 384, kernel_size=3, stride=2),
         )
-        self.path1 = BasicConv2d(384, 384, kernel_size=3, stride=2)
-        self.path2 = nn.MaxPool2d(3, stride=2)
+        self.path1 = BasicConv1d(384, 384, kernel_size=3, stride=2)
+        self.path2 = nn.MaxPool1d(3, stride=2)
 
     def forward(self, x):
         x0 = self.path0(x)
@@ -203,19 +189,19 @@ class ReductionB(nn.Module):
     def __init__(self):
         super(ReductionB, self).__init__()
         self.path0 = nn.Sequential(
-            BasicConv2d(1152, 256, kernel_size=1),
-            BasicConv2d(256, 256, kernel_size=3, padding=1),
-            BasicConv2d(256, 256, kernel_size=3, stride=2),
+            BasicConv1d(1152, 256, kernel_size=1),
+            BasicConv1d(256, 256, kernel_size=3, padding=1),
+            BasicConv1d(256, 256, kernel_size=3, stride=2),
         )
         self.path1 = nn.Sequential(
-            BasicConv2d(1152, 256, kernel_size=1),
-            BasicConv2d(256, 256, kernel_size=3, stride=2),
+            BasicConv1d(1152, 256, kernel_size=1),
+            BasicConv1d(256, 256, kernel_size=3, stride=2),
         )
         self.path2 = nn.Sequential(
-            BasicConv2d(1152, 256, kernel_size=1),
-            BasicConv2d(256, 384, kernel_size=3, stride=2),
+            BasicConv1d(1152, 256, kernel_size=1),
+            BasicConv1d(256, 384, kernel_size=3, stride=2),
         )
-        self.path3 = nn.MaxPool2d(3, stride=2)
+        self.path3 = nn.MaxPool1d(3, stride=2)
 
     def forward(self, x):
         x0 = self.path0(x)
@@ -241,17 +227,17 @@ class InceptionResNetBPoly(nn.Module):
         assert num_blocks >= 1, 'num_blocks should be greater or equal to 1'
         self.scale = scale
         self.num_blocks = num_blocks
-        self.path0_1x1 = PolyConv2d(1152, 128, kernel_size=1,
+        self.path0_1x1 = PolyConv1d(1152, 128, kernel_size=1,
                                     num_blocks=self.num_blocks)
-        self.path0_1x7 = PolyConv2d(128, 160, kernel_size=(1, 7),
-                                    num_blocks=self.num_blocks, padding=(0, 3))
-        self.path0_7x1 = PolyConv2d(160, 192, kernel_size=(7, 1),
-                                    num_blocks=self.num_blocks, padding=(3, 0))
-        self.path1 = PolyConv2d(1152, 192, kernel_size=1,
+        self.path0_1x7 = PolyConv1d(128, 160, kernel_size=(7, ),
+                                    num_blocks=self.num_blocks, padding=3)
+        self.path0_7x1 = PolyConv1d(160, 192, kernel_size=(7, ),
+                                    num_blocks=self.num_blocks, padding=3)
+        self.path1 = PolyConv1d(1152, 192, kernel_size=1,
                                 num_blocks=self.num_blocks)
-        # conv2d blocks are not shared between Inception-ResNet-B blocks
-        self.conv2d_blocks = nn.ModuleList([
-            BasicConv2d(384, 1152, kernel_size=1, output_relu=False)
+        # conv1d blocks are not shared between Inception-ResNet-B blocks
+        self.conv1d_blocks = nn.ModuleList([
+            BasicConv1d(384, 1152, kernel_size=1, output_relu=False)
             for _ in range(self.num_blocks)
         ])
         self.relu = nn.ReLU()
@@ -262,8 +248,8 @@ class InceptionResNetBPoly(nn.Module):
         x0 = self.path0_7x1(x0, block_index)
         x1 = self.path1(x, block_index)
         out = torch.cat((x0, x1), 1)
-        conv2d_block = self.conv2d_blocks[block_index]
-        out = conv2d_block(out)
+        conv1d_block = self.conv1d_blocks[block_index]
+        out = conv1d_block(out)
         return out
 
     def forward(self, x):
@@ -291,17 +277,17 @@ class InceptionResNetCPoly(nn.Module):
         assert num_blocks >= 1, 'num_blocks should be greater or equal to 1'
         self.scale = scale
         self.num_blocks = num_blocks
-        self.path0_1x1 = PolyConv2d(2048, 192, kernel_size=1,
+        self.path0_1x1 = PolyConv1d(2048, 192, kernel_size=1,
                                     num_blocks=self.num_blocks)
-        self.path0_1x3 = PolyConv2d(192, 224, kernel_size=(1, 3),
-                                    num_blocks=self.num_blocks, padding=(0, 1))
-        self.path0_3x1 = PolyConv2d(224, 256, kernel_size=(3, 1),
-                                    num_blocks=self.num_blocks, padding=(1, 0))
-        self.path1 = PolyConv2d(2048, 192, kernel_size=1,
+        self.path0_1x3 = PolyConv1d(192, 224, kernel_size=(3, ),
+                                    num_blocks=self.num_blocks, padding=1)
+        self.path0_3x1 = PolyConv1d(224, 256, kernel_size=(3, ),
+                                    num_blocks=self.num_blocks, padding=1)
+        self.path1 = PolyConv1d(2048, 192, kernel_size=1,
                                 num_blocks=self.num_blocks)
-        # conv2d blocks are not shared between Inception-ResNet-C blocks
-        self.conv2d_blocks = nn.ModuleList([
-            BasicConv2d(448, 2048, kernel_size=1, output_relu=False)
+        # conv1d blocks are not shared between Inception-ResNet-C blocks
+        self.conv1d_blocks = nn.ModuleList([
+            BasicConv1d(448, 2048, kernel_size=1, output_relu=False)
             for _ in range(self.num_blocks)
         ])
         self.relu = nn.ReLU()
@@ -312,8 +298,8 @@ class InceptionResNetCPoly(nn.Module):
         x0 = self.path0_3x1(x0, block_index)
         x1 = self.path1(x, block_index)
         out = torch.cat((x0, x1), 1)
-        conv2d_block = self.conv2d_blocks[block_index]
-        out = conv2d_block(out)
+        conv1d_block = self.conv1d_blocks[block_index]
+        out = conv1d_block(out)
         return out
 
     def forward(self, x):
@@ -432,7 +418,7 @@ class PolyNet(nn.Module):
             InceptionResNetCPoly3(scale=0.707692),
             InceptionResNetC2Way(scale=0.7),
         )
-        self.avg_pool = nn.AvgPool2d(9, stride=1)
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
         self.dropout = nn.Dropout(0.2)
         self.last_linear = nn.Linear(2048, num_classes)
 
@@ -458,23 +444,18 @@ class PolyNet(nn.Module):
         return x
 
 
-def polynet(num_classes=1000, pretrained='imagenet'):
+def polynet(num_classes=1000):
     """PolyNet architecture from the paper
     'PolyNet: A Pursuit of Structural Diversity in Very Deep Networks'
     https://arxiv.org/abs/1611.05725
     """
-    if pretrained:
-        settings = pretrained_settings['polynet'][pretrained]
-        assert num_classes == settings['num_classes'], \
-            'num_classes should be {}, but is {}'.format(
-                settings['num_classes'], num_classes)
-        model = PolyNet(num_classes=num_classes)
-        model.load_state_dict(model_zoo.load_url(settings['url']))
-        model.input_space = settings['input_space']
-        model.input_size = settings['input_size']
-        model.input_range = settings['input_range']
-        model.mean = settings['mean']
-        model.std = settings['std']
-    else:
-        model = PolyNet(num_classes=num_classes)
-    return model
+
+    return PolyNet(num_classes=num_classes)
+
+if __name__ == "__main__":
+
+    model = PolyNet()
+    input = Variable(torch.randn(2, 2, 1024))
+    output = model(input)
+
+    print(output.size())

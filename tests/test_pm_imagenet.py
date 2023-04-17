@@ -36,7 +36,7 @@ def test_pm_imagenet(model_name, pretrained):
 
     out_logits = net(x)
     if 'squeezenet' in model_name:
-        # Conv2d without view at the end
+        # Conv1d without view at the end
         assert out_logits.shape == torch.Size([1,1000,1,1])
         return
 
@@ -47,7 +47,7 @@ def test_pm_imagenet(model_name, pretrained):
     assert equal(out_logits, out_logits_2)
 
     if 'dpn' in model_name:
-        # Conv2d instead of Linear
+        # Conv1d instead of Linear
         return
     net.last_linear = nn.Linear(
         net.last_linear.in_features,

@@ -1,32 +1,21 @@
 from __future__ import print_function, division, absolute_import
+
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-import torch.utils.model_zoo as model_zoo
 
 
 __all__ = ['FBResNet',
            #'fbresnet18', 'fbresnet34', 'fbresnet50', 'fbresnet101',
            'fbresnet152']
 
-pretrained_settings = {
-    'fbresnet152': {
-        'imagenet': {
-            'url': 'http://data.lip6.fr/cadene/pretrainedmodels/fbresnet152-2e20f6b4.pth',
-            'input_space': 'RGB',
-            'input_size': [3, 224, 224],
-            'input_range': [0, 1],
-            'mean': [0.485, 0.456, 0.406],
-            'std': [0.229, 0.224, 0.225],
-            'num_classes': 1000
-        }
-    }
-}
+from torch.autograd import Variable
 
 
-def conv3x3(in_planes, out_planes, stride=1):
+def conv3x1(in_planes, out_planes, stride=1):
     "3x3 convolution with padding"
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
+    return nn.Conv1d(in_planes, out_planes, kernel_size=3, stride=stride,
                      padding=1, bias=True)
 
 
@@ -35,11 +24,11 @@ class BasicBlock(nn.Module):
 
     def __init__(self, inplanes, planes, stride=1, downsample=None):
         super(BasicBlock, self).__init__()
-        self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = nn.BatchNorm2d(planes)
+        self.conv1 = conv3x1(inplanes, planes, stride)
+        self.bn1 = nn.BatchNorm1d(planes)
         self.relu = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(planes, planes)
-        self.bn2 = nn.BatchNorm2d(planes)
+        self.conv2 = conv3x1(planes, planes)
+        self.bn2 = nn.BatchNorm1d(planes)
         self.downsample = downsample
         self.stride = stride
 
@@ -67,13 +56,13 @@ class Bottleneck(nn.Module):
 
     def __init__(self, inplanes, planes, stride=1, downsample=None):
         super(Bottleneck, self).__init__()
-        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=True)
-        self.bn1 = nn.BatchNorm2d(planes)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride,
+        self.conv1 = nn.Conv1d(inplanes, planes, kernel_size=1, bias=True)
+        self.bn1 = nn.BatchNorm1d(planes)
+        self.conv2 = nn.Conv1d(planes, planes, kernel_size=3, stride=stride,
                                padding=1, bias=True)
-        self.bn2 = nn.BatchNorm2d(planes)
-        self.conv3 = nn.Conv2d(planes, planes * 4, kernel_size=1, bias=True)
-        self.bn3 = nn.BatchNorm2d(planes * 4)
+        self.bn2 = nn.BatchNorm1d(planes)
+        self.conv3 = nn.Conv1d(planes, planes * 4, kernel_size=1, bias=True)
+        self.bn3 = nn.BatchNorm1d(planes * 4)
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
@@ -105,17 +94,13 @@ class FBResNet(nn.Module):
     def __init__(self, block, layers, num_classes=1000):
         self.inplanes = 64
         # Special attributs
-        self.input_space = None
-        self.input_size = (299, 299, 3)
-        self.mean = None
-        self.std = None
         super(FBResNet, self).__init__()
         # Modules
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
+        self.conv1 = nn.Conv1d(2, 64, kernel_size=7, stride=2, padding=3,
                                 bias=True)
-        self.bn1 = nn.BatchNorm2d(64)
+        self.bn1 = nn.BatchNorm1d(64)
         self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.maxpool = nn.MaxPool1d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block, 64, layers[0])
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
@@ -123,10 +108,10 @@ class FBResNet(nn.Module):
         self.last_linear = nn.Linear(512 * block.expansion, num_classes)
 
         for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            if isinstance(m, nn.Conv1d):
+                n = m.kernel_size[0] * m.out_channels
                 m.weight.data.normal_(0, math.sqrt(2. / n))
-            elif isinstance(m, nn.BatchNorm2d):
+            elif isinstance(m, nn.BatchNorm1d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
@@ -134,9 +119,9 @@ class FBResNet(nn.Module):
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion,
+                nn.Conv1d(self.inplanes, planes * block.expansion,
                           kernel_size=1, stride=stride, bias=True),
-                nn.BatchNorm2d(planes * block.expansion),
+                nn.BatchNorm1d(planes * block.expansion),
             )
 
         layers = []
@@ -162,7 +147,7 @@ class FBResNet(nn.Module):
 
     def logits(self, features):
         adaptiveAvgPoolWidth = features.shape[2]
-        x = F.avg_pool2d(features, kernel_size=adaptiveAvgPoolWidth)
+        x = F.avg_pool1d(features, kernel_size=adaptiveAvgPoolWidth)
         x = x.view(x.size(0), -1)
         x = self.last_linear(x)
         return x
@@ -213,23 +198,19 @@ def fbresnet101(num_classes=1000):
     return model
 
 
-def fbresnet152(num_classes=1000, pretrained='imagenet'):
+def fbresnet152(num_classes=1000):
     """Constructs a ResNet-152 model.
 
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
     model = FBResNet(Bottleneck, [3, 8, 36, 3], num_classes=num_classes)
-    if pretrained is not None:
-        settings = pretrained_settings['fbresnet152'][pretrained]
-        assert num_classes == settings['num_classes'], \
-            "num_classes should be {}, but is {}".format(settings['num_classes'], num_classes)
-        model.load_state_dict(model_zoo.load_url(settings['url']))
-        model.input_space = settings['input_space']
-        model.input_size = settings['input_size']
-        model.input_range = settings['input_range']
-        model.mean = settings['mean']
-        model.std = settings['std']
     return model
 
 
+if __name__ == '__main__':
+    model = fbresnet18()
+    input = Variable(torch.randn(2, 2, 1024))
+
+    output = model(input)
+    print(output.size())
