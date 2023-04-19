@@ -256,7 +256,7 @@ class SENet(nn.Module):
         self.inplanes = inplanes
         if input_3x3:
             layer0_modules = [
-                ('conv1', nn.Conv1d(3, 64, 3, stride=2, padding=1,
+                ('conv1', nn.Conv1d(2, 64, 3, stride=2, padding=1,
                                     bias=False)),
                 ('bn1', nn.BatchNorm1d(64)),
                 ('relu1', nn.ReLU(inplace=True)),
@@ -271,7 +271,7 @@ class SENet(nn.Module):
             ]
         else:
             layer0_modules = [
-                ('conv1', nn.Conv1d(3, inplanes, kernel_size=7, stride=2,
+                ('conv1', nn.Conv1d(2, inplanes, kernel_size=7, stride=2,
                                     padding=3, bias=False)),
                 ('bn1', nn.BatchNorm1d(inplanes)),
                 ('relu1', nn.ReLU(inplace=True)),
